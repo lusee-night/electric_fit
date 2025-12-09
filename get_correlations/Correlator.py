@@ -138,7 +138,7 @@ class Correlator:
         cors_total = np.zeros((nD, nFreq, nFreq), dtype=np.float32)
         counts_total = np.zeros(nD, dtype=np.float32)
 
-        for start in range(0, N1, batch_size):
+        for start in tqdm.tqdm(range(0, N1, batch_size)):
             end = min(start + batch_size, N1)
             
             # Get batch

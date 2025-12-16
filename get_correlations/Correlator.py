@@ -20,16 +20,28 @@ class Correlator:
     mu_bins = [0.0, 0.05, 0.2, 0.5, 1.0]
     
 
-    def __init__ (self, map_path, mu_bin1, mu_bin2, dDist = 0.1):
+    def __init__ (self, map_path, bin1, bin2, dDist = 0.1, el_param =[1e4,0.4,0.5], r_param =[0.03,0.3,0.5]):
         self.map = fitsio.read(map_path)
+        self.npix = self.map.shape[1]
         self.nside = hp.get_nside(self.map[0,:])
         self.xyz = np.array(hp.pix2vec(self.nside, np.arange(hp.nside2npix(self.nside)))).T
-        zs = np.abs(self.xyz[:, 2])
-        self.bin1_ndx = np.where((zs>=self.mu_bins[mu_bin1])& (zs<=self.mu_bins[mu_bin1+1]))[0]
-        self.bin2_ndx = np.where((zs>=self.mu_bins[mu_bin2])& (zs<=self.mu_bins[mu_bin2+1]))[0]
+        self.binmap=self.get_binmap(el_param, r_param)
+
+        self.bin1_ndx = np.where(self.binmap==bin1)[0]
+        self.bin2_ndx = np.where(self.binmap==bin2)[0]
         self.dDist = dDist
         self.nD = int(np.pi//dDist) + 1
         self.nFreq= self.map.shape[0]
+
+    def get_binmap(self,el_param, r_param):
+        """Define mu bins and assign pixels to bins based on z coordinate."""
+        binmap = np.ones(self.npix, dtype=int) * 3 # default to last bin
+        zs = np.arcsin(self.xyz[:,2])
+        xs = np.arctan2(self.xyz[:,1], self.xyz[:,0])
+        for i in [2,1,0]:
+            binmap [np.where ((zs**2+xs**2/el_param[i]) <=r_param[i]**2)[0]] = i
+        return binmap
+    
 
     def get_correlations(self):
         self.map1_pixels = self.map[:,self.bin1_ndx]

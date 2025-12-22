@@ -1,127 +1,89 @@
 #!/usr/bin/env python
 """
-Driver script to compute correlations using JAX/GPU and save to numpy file.
+Driver script to compute correlations and save to numpy file.
 
 Usage:
-    python compute_correlations.py <mu_bin1> <mu_bin2> [--output OUTPUT] [--map MAP_PATH] [--batch-size BATCH_SIZE]
+    python compute_correlations.py [OPTIONS]
+
+Options:
+    --jax / --no-jax     Use JAX-accelerated version (default: no-jax)
+    --gpu / --cpu        Use GPU or CPU (default: cpu, only applies with --jax)
+    --batch-size SIZE    Batch size for JAX version (default: 1000000)
+    --maxpix N           Maximum number of pixels to process (default: all)
+    --output FILE        Output file path (default: correlations.npz)
+    --map PATH           Path to FITS map file
 
 Examples:
-    python compute_correlations.py 0 0
-    python compute_correlations.py 1 2 --output my_correlations.npz
-    python compute_correlations.py 0 0 --batch-size 64
+    python compute_correlations.py --jax --gpu --batch-size 500000
+    python compute_correlations.py --no-jax --maxpix 1000
+    python compute_correlations.py --jax --cpu --output my_correlations.npz
 """
 import argparse
+import os
 import numpy as np
 import time
-from Correlator import Correlator
-
-
-def compute_and_save_correlations(mu_bin1, mu_bin2, map_path, output_path, batch_size=128):
-    """
-    Compute correlations using JAX/GPU and save to numpy file.
-    
-    Parameters
-    ----------
-    mu_bin1 : int
-        First mu bin index (0-3)
-    mu_bin2 : int
-        Second mu bin index (0-3)
-    map_path : str
-        Path to the FITS map file
-    output_path : str
-        Output path for the numpy file
-    batch_size : int
-        Batch size for JAX processing
-    
-    Returns
-    -------
-    tuple
-        (correlations, counts) arrays
-    """
-    print(f"Computing correlations for mu_bin1={mu_bin1}, mu_bin2={mu_bin2}")
-    print(f"Map: {map_path}")
-    print(f"Output: {output_path}")
-    print(f"Batch size: {batch_size}")
-    print("-" * 50)
-    
-    # Create correlator
-    corr = Correlator(map_path, mu_bin1, mu_bin2)
-    print(f"N1 (bin1 pixels): {len(corr.bin1_ndx)}")
-    print(f"N2 (bin2 pixels): {len(corr.bin2_ndx)}")
-    print(f"nFreq: {corr.nFreq}")
-    print(f"nD (distance bins): {corr.nD}")
-    
-    # Compute correlations using JAX
-    print("\nComputing correlations with JAX...")
-    t0 = time.time()
-    cors, counts = corr.get_correlations_jax(batch_size=batch_size)
-    elapsed = time.time() - t0
-    print(f"Computation time: {elapsed:.3f} seconds")
-    
-    # Save to numpy file
-    print(f"\nSaving to {output_path}...")
-    np.savez(output_path, 
-             correlations=cors, 
-             counts=counts,
-             mu_bin1=mu_bin1,
-             mu_bin2=mu_bin2,
-             nFreq=corr.nFreq,
-             nD=corr.nD,
-             dDist=corr.dDist,
-             mu_bins=corr.mu_bins)
-    print("Done!")
-    
-    return cors, counts
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compute correlations using JAX/GPU and save to numpy file."
+        description='Compute correlations from HEALPix map.',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("mu_bin1", type=int, help="First mu bin index (0-3)")
-    parser.add_argument("mu_bin2", type=int, help="Second mu bin index (0-3)")
-    parser.add_argument("--output", "-o", type=str, default=None,
-                        help="Output file path (default: correlations_<mu_bin1>_<mu_bin2>.npz)")
-    parser.add_argument("--map", "-m", type=str, 
-                        default="../../Drive/Simulations/SkyModels/ULSA_maps/200.fits",
-                        help="Path to the FITS map file")
-    parser.add_argument("--batch-size", "-b", type=int, default=128,
-                        help="Batch size for JAX processing (default: 128)")
+    
+    # JAX vs non-JAX
+    jax_group = parser.add_mutually_exclusive_group()
+    jax_group.add_argument('--jax', action='store_true', dest='use_jax',
+                           help='Use JAX-accelerated version')
+    jax_group.add_argument('--no-jax', action='store_false', dest='use_jax',
+                           help='Use standard NumPy version (default)')
+    parser.set_defaults(use_jax=False)
+    
+    # GPU vs CPU
+    device_group = parser.add_mutually_exclusive_group()
+    device_group.add_argument('--gpu', action='store_const', const='cuda', dest='device',
+                              help='Use GPU (CUDA) for JAX computation')
+    device_group.add_argument('--cpu', action='store_const', const='cpu', dest='device',
+                              help='Use CPU for JAX computation (default)')
+    parser.set_defaults(device='cpu')
+    
+    # Other options
+    parser.add_argument('--batch-size', type=int, default=1000000,
+                        help='Batch size for JAX version (default: 1000000)')
+    parser.add_argument('--maxpix', type=int, default=None,
+                        help='Maximum number of pixels to process (default: all)')
+    parser.add_argument('--output', '-o', type=str, default='correlations.npz',
+                        help='Output file path (default: correlations.npz)')
+    parser.add_argument('--map', type=str, 
+                        default='../../Drive/Simulations/SkyModels/ULSA_maps/200.fits',
+                        help='Path to FITS map file')
     
     args = parser.parse_args()
     
-    # Validate bin indices
-    if not (0 <= args.mu_bin1 <= 3):
-        parser.error(f"mu_bin1 must be 0-3, got {args.mu_bin1}")
-    if not (0 <= args.mu_bin2 <= 3):
-        parser.error(f"mu_bin2 must be 0-3, got {args.mu_bin2}")
+    # Set JAX platform before importing Correlator (which imports JAX)
+    if args.use_jax:
+        os.environ['JAX_PLATFORMS'] = args.device
+        print(f"Using JAX with device: {args.device}")
     
-    # Set default output path if not provided
-    output_path = args.output
-    if output_path is None:
-        output_path = f"correlations_{args.mu_bin1}_{args.mu_bin2}.npz"
+    # Import Correlator after setting JAX platform
+    from Correlator import Correlator
     
-    # Check for JAX
-    try:
-        import jax
-        print(f"JAX version: {jax.__version__}")
-        print(f"JAX devices: {jax.devices()}")
-        print()
-    except ImportError:
-        print("ERROR: JAX is not installed. Install with: pip install jax jaxlib")
-        print("For GPU support: pip install jax[cuda12]")
-        return 1
+    print(f"Loading map from: {args.map}")
+    c = Correlator(args.map)
     
-    # Compute and save
-    compute_and_save_correlations(
-        args.mu_bin1, 
-        args.mu_bin2, 
-        args.map, 
-        output_path,
-        args.batch_size
-    )
+    start_time = time.time()
     
-    return 0
+    if args.use_jax:
+        print(f"Computing correlations with JAX (batch_size={args.batch_size}, maxpix={args.maxpix})")
+        cor, count = c.get_correlations_jax(maxpix=args.maxpix, batch_size=args.batch_size)
+    else:
+        print(f"Computing correlations with NumPy (maxpix={args.maxpix})")
+        cor, count = c.get_correlations(maxpix=args.maxpix)
+    
+    elapsed = time.time() - start_time
+    print(f"Computation completed in {elapsed:.2f} seconds")
+    
+    np.savez(args.output, cor=cor, count=count)
+    print(f"Correlations saved to {args.output}")
 
 
 if __name__ == "__main__":
